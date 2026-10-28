@@ -1,14 +1,26 @@
 {
- "updated": "2026-10-28T02:31:57",
+ "competitor_channels": {
+  "maybe": 2,
+  "no": 412,
+  "unchecked": 8896,
+  "yes": 88
+ },
+ "videos_by_channel_verdict": {
+  "maybe": 1142,
+  "no": 50285,
+  "yes": 17500
+ },
+ "kept_videos": 17500,
+ "updated": "2026-10-28T02:59:24",
  "daily_min_target": 2000,
  "daily_max": 10000,
- "total_videos": 62878,
+ "total_videos": 68927,
  "channels": {
   "crawling": 2,
-  "done": 375,
+  "done": 386,
   "empty": 11,
   "junk": 17,
-  "new": 8876
+  "new": 8982
  },
  "daily": [
   {
@@ -20,10 +32,10 @@
   },
   {
    "date": "2026-10-28",
-   "new_videos": 32887,
-   "long": 19436,
-   "short": 13451,
-   "total_videos": 62878
+   "new_videos": 38936,
+   "long": 23487,
+   "short": 15449,
+   "total_videos": 68927
   }
  ]
 }

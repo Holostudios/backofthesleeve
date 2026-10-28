@@ -55,6 +55,7 @@ function injectCSS() { if (document.getElementById("tl-css")) return; const s = 
 
 /* ---------------- model ---------------- */
 function compile(M) {
+  try { prepSafety(M); } catch (e) { M._hard = new Set(); M._sub = []; M._phr = []; M._ents = new Set(); M._artN = []; }
   M._fns = M.traits.map(t => {
     if (t.kind === "re") { const rx = new RegExp(t.pat, t.flags && t.flags.indexOf("i") >= 0 ? "i" : ""); return s => rx.test(s); }
     if (t.kind === "len") return s => { const n = Array.from(s.trim()).length; return n >= t.pat[0] && n <= t.pat[1]; };
@@ -67,6 +68,48 @@ function compile(M) {
   M._tmeta = {}; M.traits.forEach(t => M._tmeta[t.id] = t);
   M._ww = {}; for (const f of ["long", "short"]) { M._ww[f] = {}; ((M.whatworks || {})[f] || []).forEach(r => M._ww[f][r.id] = r); }
 }
+
+/* ---------------- safety + relevance gates (twin of tl_safety.py; data lives in model.json: M.safety (ROT13), M.subjects, M.artists) ---------------- */
+const LEETJ = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "8": "b", "9": "g", "@": "a", "$": "s", "!": "i", "|": "i", "+": "t", "\u20ac": "e", "\u00a3": "l", "\u00a1": "i" };
+const STOPCAP = new Set("the a an and or of to in on at by for with from as is was were are be it its this that his her their they he she we you your our my i not no why how what who when where which did does do about full story stories history historic documentary official video band bands song songs album albums music rock metal pop rap hip hop untold real true secret truth lost forgotten dark tragic tragedy rise fall before after behind inside life death final last first best worst top most greatest legend legends explained meaning really almost never ever just still finally episode part vs new old one two three four five six seven eight nine ten".split(" "));
+const rot13 = s => s.replace(/[a-zA-Z]/g, c => { const b = c <= "Z" ? 65 : 97; return String.fromCharCode((c.charCodeAt(0) - b + 13) % 26 + b); });
+const stripAcc = s => s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+const normText = s => Array.from(stripAcc(s || "").toLowerCase().replace(/\u2019/g, "'")).map(ch => LEETJ[ch] || ch).join("");
+const tokensG = s => (normText(s).replace(/'/g, "").replace(/[^a-z0-9\s]/g, " ").match(/[a-z]+/g) || []);
+function squashRuns(t) { const out = []; let i = 0; while (i < t.length) { let j = i; while (j < t.length && t[j].length === 1) j++; if (j - i >= 3) { out.push(t.slice(i, j).join("")); i = j; } else { out.push(t[i]); i++; } } return out; }
+const d3 = w => w.replace(/(.)\1{2,}/g, "$1$1"), d2 = w => w.replace(/(.)\1+/g, "$1");
+function prepSafety(M) {
+  const S = M.safety || {}; M._hard = new Set((S.hard || []).map(rot13)); M._sub = (S.substr || []).map(rot13); M._phr = (S.phrases || []).map(rot13);
+  M._ents = new Set(M.subjects || []); M._artN = (M.artists || []).map(a => subjTok(a).join(" "));
+}
+function subjTok(s) { return (stripAcc(s || "").toLowerCase().replace(/\u2019/g, "'").match(/[a-z0-9]+(?:'[a-z]+)?'?/g) || []).map(w => w.replace(/'s$|'$/, "")); }
+function isBlocked(title, M) {
+  if (!M._hard || (!M._hard.size && !M._sub.length)) return false;
+  const toks = squashRuns(tokensG(title));
+  for (const w of toks) {
+    if (M._hard.has(w) || M._hard.has(d3(w))) return true;
+    if (/(.)\1\1/.test(w) && M._hard.has(d2(w))) return true;
+    if (w.length >= 6) { const x = /(.)\1/.test(w) ? d2(w) : w; for (const e of M._sub) if (w.indexOf(e) >= 0 || x.indexOf(e) >= 0) return true; }
+  }
+  const jj = " " + toks.join(" ") + " "; for (const p of M._phr) if (jj.indexOf(" " + p + " ") >= 0) return true;
+  return false;
+}
+const wordlike = w => { if (w.length < 3) return false; const v = (w.match(/[aeiouy]/g) || []).length, r = v / w.length; return r >= 0.2 && r <= 0.8 && !/[^aeiouy]{5,}/.test(w); };
+function findSubject(title, M) {
+  const toks = subjTok(title);
+  for (let n = 4; n >= 1; n--) for (let i = 0; i + n <= toks.length; i++) { const g = toks.slice(i, i + n); if (M._ents.has(g.join(" ")) && !g.every(x => STOPCAP.has(x))) return g.join(" "); }
+  const s = " " + toks.join(" ") + " "; for (const a of M._artN) if (a && s.indexOf(" " + a + " ") >= 0) return a;
+  const words = (title || "").match(/[A-Za-z][A-Za-z'\u2019\-]*/g) || [];
+  for (const w of words) { const lw = w.toLowerCase().replace(/\u2019/g, "'").replace(/^'+|'+$/g, ""); if (lw.length >= 3 && w[0] === w[0].toUpperCase() && w !== w.toUpperCase() && !STOPCAP.has(lw) && wordlike(lw.replace(/'/g, "").replace(/-/g, ""))) return lw; }
+  return null;
+}
+function gate(title) {
+  const M = TL.M; if (isBlocked(title, M)) return { status: "blocked", reason: "Title blocked: offensive language", subject: null };
+  const sub = findSubject(title, M); if (!sub) return { status: "no_subject", reason: "No clear subject; add the artist or song", subject: null };
+  return { status: "ok", reason: "", subject: sub };
+}
+TL.gate = gate;
+const TEASER = /\b(untold|secret|secrets|truth|forgotten|mystery|mysteries|real|true|lost|legend|legends|hidden|shocking|dark|insane|crazy|nobody|never|exposed|revealed|finally)\b/i;
 function findArtist(M, s) { if (!M._art) return null; const m = M._art.exec(s.toLowerCase().replace(/\u2019/g, "'")); return m ? m[2] : null; }
 function traitVec(M, s) {
   const v = {}; M.traits.forEach((t, i) => { if (M._fns[i]) v[t.id] = M._fns[i](s) ? 1 : 0; });
@@ -108,7 +151,7 @@ function reasons(title, fmt) {
   wu.forEach(x => out.push({ k: "up", sym: "+", text: `Word "${x.term}"`, sub: `${x.lift.toFixed(2)}x as likely to outperform (${fmtN(x.n)} titles, ${x.conf})`, w: 0 }));
   wd.forEach(x => out.push({ k: "dn", sym: "-", text: `Word "${x.term}"`, sub: `${x.lift.toFixed(2)}x as likely to outperform (${fmtN(x.n)} titles, ${x.conf})`, w: 0 }));
   // proven traits that are missing
-  const skip = new Set(["len_short", "len_mid", "len_long", "len_xl", "words_few", "number_start", "shorts_tag", "caps_many", "listicle"]);
+  const skip = new Set(["len_short", "len_mid", "len_long", "len_xl", "words_few", "number_start", "shorts_tag", "caps_many", "listicle", "mystery"]);   // never advise teaser words (secret / truth / untold)
   const lenIds = ["len_short", "len_mid", "len_long", "len_xl"]; const miss = [];
   for (const id in ww) { const r = ww[id]; if (tv[id] === 1 || skip.has(id) || r.lo <= 1.05 || r.conf === "Low") continue; if (id === "artist_early" && tv.named_artist === 0) continue; miss.push(r); }
   miss.sort((a, b) => b.lift - a.lift);
@@ -134,7 +177,7 @@ function candidates(title, fmt) {
   const subj = A || core;
   fr.forEach(f => { let x = f.template; if (x.indexOf("{T}") >= 0) { if (!rest || rest.split(" ").length > 3) return; x = x.replace("{T}", rest.replace(/^the\s+/i, "").replace(/\b\w/g, c => c.toUpperCase())); x = x.replace("{A}", subj); } else x = x.replace(/\{A\}/g, subj); if (hasA) add(x, "Proven frame: " + f.label.replace(/\{A\}/g, "...")); });
   // generic honest frames (kept even when the data table is small)
-  [["The Story of {A}", "story frame"], ["What Really Happened to {A}", "what happened"], ["The Rise and Fall of {A}", "rise and fall"], ["{A}: The Full Story", "colon + story"], ["Why {A} Still Matters", "why frame"], ["{A} Explained", "explained"], ["The Untold Story of {A}", "untold story"], ["The Real Story Behind {A}", "real story"]].forEach(([tp, h]) => { if (hasA) add(tp.replace("{A}", subj), "Frame: " + h); });
+  [["The Story of {A}", "story frame"], ["What Really Happened to {A}", "what happened"], ["The Rise and Fall of {A}", "rise and fall"], ["{A}: The Full Story", "colon + story"], ["Why {A} Still Matters", "why frame"], ["{A} Explained", "explained"], ["Why {A} Mattered", "why frame"]].forEach(([tp, h]) => { if (hasA) add(tp.replace("{A}", subj), "Frame: " + h); });
   // mechanical edits of the typed title
   const parts = t.split(/\s*[|\u2013\u2014]\s*|\s+-\s+|:\s+/).filter(Boolean); if (parts.length > 1) { add(parts[0], "Shorter (first part)"); add(parts[parts.length - 1], "Shorter (last part)"); add(parts.slice(0, 2).join(": "), "Colon split"); }
   const noTag = t.replace(/\s*#shorts?\b/ig, "").trim(); if (noTag !== t) add(noTag, "Remove #Shorts tag"); else if (fmt === "short") add(t + " #Shorts", "Add #Shorts tag");
@@ -144,8 +187,11 @@ function candidates(title, fmt) {
   if (A && !new RegExp(A.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i").test(parts[0] || "")) add(A + ": " + parts[0], "Artist first");
   if (A && rest) { add(A + " - " + titleCase(rest), "Artist first"); add(titleCase(rest) + " | " + A + " Story", "Artist last"); }
   let res = [...set.values()];
-  const s0 = score(t, fmt);
-  res.forEach(c => { const s = score(c.t, fmt); c.score = s.score; c.pct = s.pct; c.prob = s.prob; c.d = s.z - s0.z; });
+  const g0 = gate(t); if (g0.status !== "ok") return [];                                             // rewrites only for titles that pass both gates
+  const subjKey = g0.subject;
+  res = res.filter(c => gate(c.t).status === "ok" && (!TEASER.test(c.t) || TEASER.test(t)) && (!subjKey || normText(c.t).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").indexOf(subjKey.replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ")) >= 0));   // keeps the subject, no new teaser words, nothing offensive
+  const s0 = score(t, fmt), CAP = 15;
+  res.forEach(c => { const s = score(c.t, fmt); c.raw = s.score; c.score = Math.min(s.score, s0.score + CAP); c.capped = s.score > c.score; c.pct = s.pct; c.prob = s.prob; c.d = s.z - s0.z; });
   res.sort((a, b) => b.score - a.score || b.d - a.d);
   const seen = new Set(), out = []; for (const c of res) { const k = c.t.toLowerCase().replace(/[^a-z0-9 ]/g, ""); if (seen.has(k)) continue; seen.add(k); out.push(c); if (out.length >= 5) break; }
   const tvO = traitVec(M, t); out.forEach(c => { const tv = traitVec(M, c.t), plus = [], minus = []; M._ids.concat(["named_artist"]).forEach(id => { if (tv[id] === 1 && tvO[id] === 0 && (M._ww[fmt] || {})[id] && M._ww[fmt][id].lift > 1) plus.push((M._tmeta[id] || { label: "Names an artist" }).label); if (tv[id] === 0 && tvO[id] === 1 && (M._ww[fmt] || {})[id] && M._ww[fmt][id].lift > 1) minus.push((M._tmeta[id] || { label: "Names an artist" }).label); }); c.plus = plus.slice(0, 3); c.minus = minus.slice(0, 2); });
@@ -159,23 +205,62 @@ function guessFmt(t) { return /#shorts?\b/i.test(t) ? "short" : null; }
 function ringHTML(s) { return `<div class="tl-ring" style="--p:${s.score};--c:${ringColor(s.score)}"><b>${s.score}</b></div>`; }
 function scoreBlock(title) {
   const M = TL.M, m = M.models[fmt]; if (!title.trim()) return `<div class="muted" style="margin-top:12px;font-size:13px">Type or paste a title above. The score updates as you type.</div>`;
-  const s = score(title, fmt), base = m.base_rate;
-  return `<div class="tl-score">${ringHTML(s)}<div class="tl-sc-t"><b>Better than ${s.score}% of ${fmtN(m.n)} real ${fmt === "long" ? "long-form videos" : "Shorts"}</b><br>Model's chance of beating its channel's norm by 2x: <b>${(100 * s.prob).toFixed(0)}%</b> (an average title: ${(100 * base).toFixed(0)}%).<br><span style="font-size:11.5px">${title.trim().length} characters. A title explains only part of a video's result: use the score to compare wordings, not to predict views.</span></div></div>`;
+  const g = gate(title); if (g.status === "blocked") return `<div class="tl-score" style="border-color:var(--bad)"><div class="tl-sc-t"><b style="color:var(--bad)">${esc(g.reason)}</b><br>No score and no rewrites for this text.</div></div>`;
+  const s = score(title, fmt), base = m.base_rate, warn = g.status === "no_subject" ? `<div class="tl-note" style="margin:8px 0 0;color:#f2b96b"><b>${esc(g.reason)}.</b> The score below only measures the shape of the wording, and a title without a recognisable subject is not a meaningful result.</div>` : "";
+  return warn + `<div class="tl-score">${ringHTML(s)}<div class="tl-sc-t"><b>Better than ${s.score}% of ${fmtN(m.n)} real ${fmt === "long" ? "long-form videos" : "Shorts"}</b><br>Model's chance of beating its channel's norm by 2x: <b>${(100 * s.prob).toFixed(0)}%</b> (an average title: ${(100 * base).toFixed(0)}%).<br><span style="font-size:11.5px">${title.trim().length} characters. A title explains only part of a video's result: use the score to compare wordings, not to predict views.</span></div></div>`;
 }
 function reasonsHTML(title) {
-  if (!title.trim()) return ""; const rs = reasons(title, fmt); if (!rs.length) return `<div class="tl-note">No known traits detected yet.</div>`;
+  if (!title.trim()) return ""; if (gate(title).status === "blocked") return ""; const rs = reasons(title, fmt); if (!rs.length) return `<div class="tl-note">No known traits detected yet.</div>`;
   return `<div class="tl-reasons">${rs.map(r => `<div class="tl-r"><i class="${r.k}">${r.sym}</i><div>${esc(r.text)}<small>${esc(r.sub)}</small></div></div>`).join("")}</div>`;
 }
 function sugHTML(title) {
   if (!title.trim()) return `<div class="muted" style="font-size:13px">Better wordings appear here while you type. Each one is scored by the same model.</div>`;
+  const g = gate(title); if (g.status === "blocked") return `<div class="muted" style="font-size:13px">Title blocked: offensive language. No rewrites.</div>`; if (g.status === "no_subject") return `<div class="muted" style="font-size:13px">No rewrites: ${esc(g.reason)}.</div>`;
   const s0 = score(title, fmt), cs = candidates(title, fmt); if (!cs.length) return `<div class="muted" style="font-size:13px">No rewrite found for this one yet. Try adding the artist's name.</div>`;
-  return `<div class="tl-sug">${cs.map((c, i) => `<div class="tl-s" data-t="${esc(c.t)}" title="Click to use this title"><div class="tl-sc ${tier(c.score)}">${c.score}</div><div class="tl-tx">${esc(c.t)}<small>${c.score >= s0.score ? "+" : ""}${c.score - s0.score} vs yours &middot; ${esc(c.how)}${c.plus.length ? " &middot; adds: " + esc(c.plus.join(", ")) : ""}${c.minus.length ? " &middot; drops: " + esc(c.minus.join(", ")) : ""}</small></div><button class="tl-cp" data-copy="${esc(c.t)}">Copy</button></div>`).join("")}</div><div class="tl-note">Rule-based rewrites that apply patterns proven in the data. Check that the video really delivers what the title says before using one. Click a suggestion to put it in the box.</div>`;
+  return `<div class="tl-sug">${cs.map((c, i) => `<div class="tl-s" data-t="${esc(c.t)}" title="Click to use this title"><div class="tl-sc ${tier(c.score)}">${c.score}</div><div class="tl-tx">${esc(c.t)}<small>${c.score >= s0.score ? "+" : ""}${c.score - s0.score}${c.capped ? " (capped)" : ""} vs yours &middot; ${esc(c.how)}${c.plus.length ? " &middot; adds: " + esc(c.plus.join(", ")) : ""}${c.minus.length ? " &middot; drops: " + esc(c.minus.join(", ")) : ""}</small></div><button class="tl-cp" data-copy="${esc(c.t)}">Copy</button></div>`).join("")}</div><div class="tl-note">Rule-based rewrites that keep your subject. A wording pattern only helps when the video really delivers what the title promises, so a rewrite can never be scored more than 15 points above your own title. Click a suggestion to put it in the box.</div>`;
 }
 let deb = null;
 function onType() {
   const el = document.getElementById("tlIn"); if (!el) return; const v = el.value; const g = guessFmt(v); if (g && g !== fmt) { fmt = g; syncSeg(); }
-  document.getElementById("tlScore").innerHTML = scoreBlock(v); document.getElementById("tlReasons").innerHTML = reasonsHTML(v); document.getElementById("tlSug").innerHTML = sugHTML(v);
+  document.getElementById("tlScore").innerHTML = scoreBlock(v); document.getElementById("tlReasons").innerHTML = reasonsHTML(v); document.getElementById("tlSug").innerHTML = sugHTML(v); v2Schedule(v);
 }
+/* ---------------- Title Lab v2 (local deep analysis; only reachable on the Title Lab computer) ---------------- */
+const V2API = "http://127.0.0.1:8792"; let v2seq = 0, v2deb = null, v2down = 0;
+function v2call(path, body, ms) {
+  const ac = new AbortController(), to = setTimeout(() => ac.abort(), ms || 15000);
+  return fetch(V2API + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ac.signal }).then(r => r.json()).finally(() => clearTimeout(to));
+}
+function ytUrl(u) { return /^https:\/\/www\.youtube\.com\/watch\?v=[\w-]{6,20}$/.test(u || "") ? u : null; }
+function v2HTML(a) {
+  if (!a || a.status === "blocked" || a.status === "empty") return "";
+  const conf = a.confidence ? `<span class="tl-badge ${esc(a.confidence)}">Confidence: ${esc(a.confidence)}</span>` : "";
+  if (a.status === "no_subject") return `<div class="tl-note">Deep analysis skipped: ${esc(a.message || "no clear subject")}.</div>`;
+  const ev = ((a.neighbours || {}).evidence || []).map(e => { const u = ytUrl(e.url); return `<tr><td>${u ? `<a href="${u}" target="_blank" rel="noopener">${esc(e.title)}</a>` : esc(e.title)}</td><td class="muted">${esc(e.channel)}</td><td>${fmtN(e.views)}</td><td>${fmtN(e.views_per_day)}/day</td><td style="color:${e.hit ? "var(--ok)" : "inherit"}">${e.outlier}x${e.hit ? " hit" : ""}</td><td class="muted">${e.sim}</td></tr>`; }).join("");
+  const t = a.topic, tp = t && t.n ? `<div class="tl-note" style="margin:8px 0 0"><b>Topic: ${esc(t.entity)}</b> &middot; ${t.n} videos / ${t.channels} channels &middot; median ${t.median_views_per_day}/day, best ${t.top_views_per_day}/day &middot; hit rate ${(100 * t.hit_rate).toFixed(0)}% vs ${(100 * t.base_hit).toFixed(0)}% typical (${esc(t.label)})</div>` : "";
+  const j = a.judge ? `<div class="tl-note" style="margin:8px 0 0"><b>AI judge</b> (wording only, 1-5): clarity ${a.judge.clarity} &middot; curiosity ${a.judge.curiosity_gap} &middot; specificity ${a.judge.specificity} &middot; stakes ${a.judge.emotional_stakes} &middot; promise ${a.judge.promise_delivery}</div>` : "";
+  const head = a.headline === "combined" ? `<div class="tl-note" style="margin:8px 0 0"><b>Combined score ${a.score}</b> (wording + similar videos + topic${a.combined && a.combined.with_judge_pct != null ? " + AI judge" : ""}), validated better than wording alone.</div>` : "";
+  return `<div class="sec" style="margin-top:14px">Deep analysis ${conf}</div>${head}<ul style="margin:8px 0 0 18px;padding:0;font-size:13px;line-height:1.5">${(a.breakdown || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul>${tp}${j}
+  ${ev ? `<div class="tl-tbl" style="margin-top:10px"><table><tr><th>Closest real titles</th><th>Channel</th><th>Views</th><th>Speed</th><th>vs channel norm</th><th>Match</th></tr>${ev}</table></div>` : ""}
+  <div style="margin-top:10px"><textarea id="tlFacts" class="tl-in" rows="1" maxlength="400" placeholder="Optional: true facts about the video (e.g. the year, the song) so rewrites may use them" style="font-size:12.5px"></textarea><button class="tl-cp" id="tlRwBtn" style="margin-top:6px">Ask the local AI for honest rewrites</button></div><div id="tlRw"></div>`;
+}
+function v2Schedule(v) {
+  const box = document.getElementById("tlV2"); if (!box) return; clearTimeout(v2deb); const my = ++v2seq, g = v.trim() ? gate(v) : { status: "empty" };
+  if (g.status === "blocked" || g.status === "empty") { box.innerHTML = ""; return; }
+  v2deb = setTimeout(() => {
+    v2call("/analyze", { title: v, fmt }, 20000).then(a => { if (my !== v2seq) return; v2down = 0; box.innerHTML = v2HTML(a); }).catch(() => {
+      if (my !== v2seq) return; box.innerHTML = `<div class="tl-note" style="margin-top:12px">Deep analysis (similar real videos, topic demand, AI judge) runs only on the Title Lab computer. This view shows the wording-only score.</div>`;
+    });
+  }, 650);
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("#tlRwBtn"); if (!b) return; const el = document.getElementById("tlIn"), out = document.getElementById("tlRw"), f = document.getElementById("tlFacts"); if (!el || !out) return;
+  b.disabled = true; b.textContent = "Thinking (about 15 seconds)..."; out.innerHTML = "";
+  v2call("/rewrite", { title: el.value, fmt, facts: f ? f.value : "" }, 120000).then(r => {
+    b.disabled = false; b.textContent = "Ask the local AI for honest rewrites"; const rs = r.rewrites || [];
+    out.innerHTML = rs.length ? `<div class="tl-sug" style="margin-top:8px">${rs.map(c => `<div class="tl-s" data-t="${esc(c.title)}" title="Click to use this title"><div class="tl-sc ${tier(c.score)}">${c.score}</div><div class="tl-tx">${esc(c.title)}<small>${c.delta >= 0 ? "+" : ""}${c.delta} vs yours${c.capped ? " (capped)" : ""} &middot; similar videos hit ${(100 * c.neighbours_hit_rate).toFixed(0)}% of the time</small></div></div>`).join("")}</div><div class="tl-note">${esc(r.note || "")} ${r.rejected_by_honesty_filter ? r.rejected_by_honesty_filter + " AI drafts were dropped by the honesty filter." : ""}</div>` : `<div class="tl-note" style="margin-top:8px">${esc(r.message || "No rewrites.")} ${r.rejected_by_honesty_filter ? r.rejected_by_honesty_filter + " AI drafts were dropped because they used words or facts you did not give." : ""} Add true facts above to allow more wording.</div>`;
+    out.querySelectorAll(".tl-s").forEach(n => n.onclick = () => { el.value = n.dataset.t; onType(); el.focus(); });
+  }).catch(() => { b.disabled = false; b.textContent = "Ask the local AI for honest rewrites"; out.innerHTML = `<div class="tl-note" style="margin-top:8px">The local AI is not reachable from this browser.</div>`; });
+});
 function syncSeg() { document.querySelectorAll("#tlSeg button").forEach(b => b.classList.toggle("on", b.dataset.f === fmt)); const ex = document.getElementById("tlExample"); }
 function wire() {
   const el = document.getElementById("tlIn"); if (!el) return;
@@ -206,7 +291,7 @@ function oursHTML() {
   if (!O || !(O.items || []).length) return `<div class="muted" style="font-size:13px">Not generated yet. The weekly Title Lab run (and the heavy chain) asks the local Ollama model for 5 honest titles per video and package, then scores them here.</div>`;
   const live = O.items.filter(i => i.kind !== "package"), pk = O.items.filter(i => i.kind === "package");
   const card = it => {
-    const f = it.fmt === "short" ? "short" : "long", cs = score(it.current || "", f), titles = (it.titles || []).map(t => { const s = score(t.t, f); return { ...t, score: s.score, prob: s.prob }; }).sort((a, b) => b.score - a.score).slice(0, 5);
+    const f = it.fmt === "short" ? "short" : "long", cs = score(it.current || "", f), titles = (it.titles || []).filter(t => !TEASER.test(t.t) || TEASER.test(it.current || "") || TEASER.test(it.name || "")).filter(t => !isBlocked(t.t, TL.M)).map(t => { const s = score(t.t, f); return { ...t, score: s.score, prob: s.prob }; }).sort((a, b) => b.score - a.score).slice(0, 5);
     return `<div class="tl-card"><div class="tl-k">${esc(it.label || "")} &middot; ${f === "short" ? "Short" : "Long-form"}</div><h4>${esc(it.name)}</h4>${it.current ? `<div class="tl-cur"><span class="tl-sc ${tier(cs.score)}" style="padding:3px 6px;border-radius:8px;border:1px solid">${cs.score}</span><span>Current: ${esc(it.current)}</span></div>` : `<div class="tl-note" style="margin:6px 0">No title yet.</div>`}
     <div class="tl-sug">${titles.map(t => `<div class="tl-s" data-use="${esc(t.t)}" style="cursor:pointer"><div class="tl-sc ${tier(t.score)}">${t.score}</div><div class="tl-tx">${esc(t.t)}<small>${esc(t.why || "")}</small></div></div>`).join("") || '<div class="muted">No honest titles passed the checks yet.</div>'}</div>
     <div class="tl-note">${esc(it.basis || "")}</div></div>`;
@@ -226,7 +311,7 @@ function init() {
     <div class="tl-hero"><div class="tl-box"><h3>Score a title</h3><div class="d">Type or paste a title. Live 0-100 score = percentile against real videos.</div>
       <div class="tl-seg" id="tlSeg"><button data-f="long" class="${fmt === "long" ? "on" : ""}">Long-form</button><button data-f="short" class="${fmt === "short" ? "on" : ""}">Short</button></div>
       <textarea id="tlIn" class="tl-in" rows="2" maxlength="200" placeholder="e.g. The Band Nobody Wanted (Linkin Park)" autocomplete="off" spellcheck="false"></textarea>
-      <div id="tlScore"></div><div id="tlReasons"></div></div>
+      <div id="tlScore"></div><div id="tlReasons"></div><div id="tlV2"></div></div>
       <div class="tl-box"><h3>Better titles</h3><div class="d">Top 5 rewrites that apply proven traits, re-scored live.</div><div id="tlSug"></div></div></div>
     <div class="tl-box"><h3>Our videos and upcoming packages</h3><div class="d">Top 5 honest titles per item, written by local Ollama and scored by the model.</div><div id="tlOurs">${oursHTML()}</div></div>
     <div class="tl-box"><h3>What works</h3><div class="d">Every trait, with lift, sample size and confidence.</div><div class="tl-seg" id="tlWWseg"><button data-f="long" class="${fmt === "long" ? "on" : ""}">Long-form</button><button data-f="short" class="${fmt === "short" ? "on" : ""}">Shorts</button></div><div id="tlWW">${wwHTML()}</div></div>
