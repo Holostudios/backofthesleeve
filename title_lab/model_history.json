@@ -1,0 +1,69 @@
+{
+ "runs": [
+  {
+   "at": "2026-10-28T02:29:34",
+   "secs": 41,
+   "rc": 0,
+   "videos_collected": 62878,
+   "videos_labelled": 33362,
+   "channels_used": 229,
+   "channels_in_db": 9281,
+   "built": "2026-10-28T02:29:09",
+   "candidate": {
+    "long": {
+     "auc": 0.6125,
+     "spearman": 0.0529,
+     "pairwise_within_channel": 0.5346,
+     "auc_traits_only": 0.5716,
+     "auc_shuffled_control": 0.489,
+     "top20_hit_rate": 0.3227,
+     "bottom20_hit_rate": 0.1192,
+     "n_train": 17308,
+     "n_test": 4074,
+     "holdout": "uploaded after 2026-02-27"
+    },
+    "short": {
+     "auc": 0.5872,
+     "spearman": 0.0676,
+     "pairwise_within_channel": 0.5235,
+     "auc_traits_only": 0.5645,
+     "auc_shuffled_control": 0.5126,
+     "top20_hit_rate": 0.2116,
+     "bottom20_hit_rate": 0.1063,
+     "n_train": 10000,
+     "n_test": 1980,
+     "holdout": "newest 20% of each channel's Shorts feed"
+    }
+   },
+   "current": {
+    "long": {
+     "auc": 0.6249,
+     "spearman": 0.0812,
+     "pairwise_within_channel": 0.5481,
+     "auc_traits_only": 0.5825,
+     "auc_shuffled_control": 0.4967,
+     "top20_hit_rate": 0.3449,
+     "bottom20_hit_rate": 0.1174,
+     "n_train": 14038,
+     "n_test": 3027,
+     "holdout": "uploaded after 2026-03-27"
+    },
+    "short": {
+     "auc": 0.6163,
+     "spearman": 0.0479,
+     "pairwise_within_channel": 0.5203,
+     "auc_traits_only": 0.6002,
+     "auc_shuffled_control": 0.4909,
+     "top20_hit_rate": 0.2509,
+     "bottom20_hit_rate": 0.0896,
+     "n_train": 7003,
+     "n_test": 1397,
+     "holdout": "newest 20% of each channel's Shorts feed"
+    }
+   },
+   "promoted": false,
+   "reason": "kept current model: candidate AUC lower (long Shorts)"
+  }
+ ],
+ "updated": "2026-10-28T02:29:34"
+}
