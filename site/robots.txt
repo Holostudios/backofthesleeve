@@ -1,3 +1,4 @@
 User-agent: *
 Allow: /
-Sitemap: https://backofthesleeve.netlify.app/sitemap.xml
+
+Sitemap: https://holostudios.github.io/backofthesleeve-links/sitemap.xml
