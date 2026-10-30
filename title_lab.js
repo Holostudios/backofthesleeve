@@ -317,6 +317,28 @@ function oursHTML() {
   };
   return `${live.length ? `<div class="sec" style="margin-top:0">Our videos</div><div class="tl-ours">${live.map(card).join("")}</div>` : ""}${pk.length ? `<div class="sec">Upcoming packages</div><div class="tl-ours">${pk.map(card).join("")}</div>` : ""}<div class="tl-note" style="margin-top:12px">Titles written by local Ollama (${esc(O.model || "")}, free, on the PC) from the facts in each video's own description and script notes, then filtered so every name and number appears in those facts, then scored by this model. Generated ${esc((O.generated || "").replace("T", " ").slice(0, 16))}. ${esc(O.note || "")} Click a title to load it in the scorer.</div>`;
 }
+/* ---------------- prediction vs actual tracker (data: D.prediction_tracker in the encrypted payload, written by title_lab\tl_predict.py) ---------------- */
+function predRender() {
+  const el = document.getElementById("tlPred"); if (!el) return;
+  const T = (typeof D !== "undefined" && D && D.prediction_tracker) || null;
+  if (!T) { el.innerHTML = `<div class="tl-note">The tracker has no data in this view yet. It is written on the Title Lab computer and arrives with the next dashboard publish.</div>`; return; }
+  const A = T.accuracy || {}, P = T.predictions || [];
+  const cell = (l, a) => `<div><div class="l">${l}</div><div class="v">${a && a.pairwise_accuracy != null ? a.pairwise_accuracy + "%" : "-"}</div><div class="s">${esc((a && a.status) || "")}${a && a.spearman != null ? " &middot; rank correlation " + a.spearman : ""}</div></div>`;
+  const fmtT = t => esc(String(t || "").replace("T", " ").slice(0, 16));
+  const nn = (v, suf) => v == null ? "-" : fmtN(v) + (suf || "");
+  const rows = P.map(p => { const a = p.actual, mat = p.mature_after_days;
+    const lockTxt = p.kind === "pre_post" ? `<span class="tl-badge Medium">locked before posting</span>` : `<span class="tl-badge Low">locked after posting (baseline)</span>`;
+    const st = p.status === "resolved" ? `<b>resolved</b>` : p.status === "maturing" ? `maturing (day ${a && a.age_days != null ? Math.floor(a.age_days) : "?"} of ${mat})` : esc(p.status);
+    return `<tr><td>${esc(p.title)}<br><span class="muted" style="font-size:11.5px">${esc(p.fmt === "short" ? "Short" : "Long-form")} &middot; ${esc(p.video_id || p.key)}</span></td>
+      <td>${lockTxt}<br><span class="muted" style="font-size:11.5px">${fmtT(p.locked_at)} &middot; lock #${p.pred_id} &middot; sha ${esc(p.sha256)}</span></td>
+      <td><b>${p.score == null ? "-" : Math.round(p.score)}</b><br><span class="muted" style="font-size:11.5px">percentile vs competitor titles${p.combined_score != null ? "; combined " + Math.round(p.combined_score) : ""}</span></td>
+      <td>${a ? nn(a.views) : "-"}</td><td>${a ? (a.views_per_day == null ? "-" : a.views_per_day) : "-"}</td><td>${a && a.ctr != null ? a.ctr + "%" : "-"}</td><td>${a && a.avg_pct != null ? a.avg_pct + "%" : (a && a.avd_s != null ? Math.floor(a.avd_s / 60) + ":" + String(Math.round(a.avd_s % 60)).padStart(2, "0") + " avg view" : "-")}</td>
+      <td>${st}<br><span class="muted" style="font-size:11.5px">${p.counts ? "counts toward accuracy" : "not counted: " + esc(p.why_not_counted || "")}</span></td></tr>`; }).join("");
+  el.innerHTML = `<div class="tl-kp" style="margin-bottom:12px">${cell("Long-form accuracy", A.long)}${cell("Shorts accuracy", A.short)}</div>
+    <div class="tl-tbl"><table><tr><th>Video</th><th>Prediction locked</th><th>Predicted score</th><th>Views</th><th>Views/day</th><th>CTR</th><th>Retention</th><th>Status</th></tr>${rows || `<tr><td colspan="8" class="muted">No predictions locked yet.</td></tr>`}</table></div>
+    <ul style="margin:10px 0 0 18px;padding:0;font-size:12.5px;line-height:1.5" class="muted">${(T.rules || []).map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+    <div class="tl-note" style="margin-top:8px">${esc(T.model_note || "")} Updated ${fmtT(T.generated)}. Lock a title before it posts: <code>python tl_predict.py lock --title "..." --fmt long</code> on the Title Lab computer.</div>`;
+}
 function render() {
   injectCSS(); setTimeout(init, 0);
   return `<div class="h"><div><h1>Title Lab</h1><p>Score any title against tens of thousands of real music-history videos, get better wordings while you type, and see the traits that actually work.</p></div></div><div class="tl-wrap" id="tlRoot"><div class="muted" id="tlLoad">Loading the model...</div></div>`;
@@ -334,10 +356,11 @@ function init() {
       <div class="tl-box"><h3>Better titles</h3><div class="d">Top 5 rewrites that apply proven traits, re-scored live.</div><div id="tlSug"></div></div></div>
     <div class="tl-box"><h3>Data sources and weights</h3><div class="d">Our own results come first. A higher tier overrides a lower one only once it has enough data.</div><div id="tlOwnTiers"></div></div>
     <div class="tl-box"><h3>What we've learned</h3><div class="d">Rules learned from our own videos and A/B tests, with their evidence. Nothing is promoted until it beats the wording model on a leave-one-out check of our own videos.</div><div id="tlOwnLearn"></div><div class="sec" style="margin-top:14px">Learning history</div><div id="tlOwnChart"></div></div>
+    <div class="tl-box"><h3>Predicted vs actual</h3><div class="d">Before each video posts, the Lab locks its competitor-based prediction. Later it compares that prediction with the real views, CTR and retention and keeps a running accuracy score.</div><div id="tlPred"></div></div>
     <div class="tl-box"><h3>Our videos and upcoming packages</h3><div class="d">Top 5 honest titles per item, written by local Ollama and scored by the model.</div><div id="tlOurs">${oursHTML()}</div></div>
     <div class="tl-box"><h3>What works</h3><div class="d">Every trait, with lift, sample size and confidence.</div><div class="tl-seg" id="tlWWseg"><button data-f="long" class="${fmt === "long" ? "on" : ""}">Long-form</button><button data-f="short" class="${fmt === "short" ? "on" : ""}">Shorts</button></div><div id="tlWW">${wwHTML()}</div></div>
     <div class="tl-box"><h3>About this data</h3><div class="tl-note" style="font-size:12.5px;margin:6px 0 0">${fmtN(me.videos_after_filters)} real public videos from ${fmtN(me.channels_used)} music-history, band-story, song-meaning and documentary channels (${fmtN(me.videos_labelled)} with enough neighbours to measure). Collected with free yt-dlp metadata reads (no downloads), refreshed weekly, last collected ${esc(String(me.refreshed || "").replace("T", " ").slice(0, 16))}. ${esc(me.target || "")}. ${esc(me.rounding_note || "")}<br><br>Validation: the models were trained on older uploads and tested on the newest 20% (${ml ? esc(ml.metrics.holdout) : ""}; Shorts: ${ms ? esc(ms.metrics.holdout) : ""}). Long-form AUC ${ml ? ml.metrics.auc.toFixed(3) : "-"} (traits only ${ml ? ml.metrics.auc_traits_only.toFixed(3) : "-"}, shuffled-score control ${ml ? ml.metrics.auc_shuffled_control.toFixed(3) : "-"}); within the same channel the higher-scored title won ${ml && ml.metrics.pairwise_within_channel ? (100 * ml.metrics.pairwise_within_channel).toFixed(0) + "%" : "-"} of pairs. AUC 0.5 is a coin flip, so a title score is a modest nudge, not a promise.</div></div>`;
-    wire();
+    wire(); predRender();
   };
   if (TL.M) return go_();
   fetch("title_lab/model.json?v=" + Math.floor(Date.now() / 3600000)).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }).then(M => { compile(M); TL.M = M; TL.ready = true; go_(); }).catch(e => { TL.err = String(e); const r = document.getElementById("tlRoot"); if (r) r.innerHTML = `<div class="tl-box"><h3>Model not available</h3><div class="muted">${esc(TL.err)}. The model file (title_lab/model.json) is published by the weekly Title Lab run.</div></div>`; });
